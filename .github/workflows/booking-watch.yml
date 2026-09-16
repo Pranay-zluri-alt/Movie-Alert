@@ -9,7 +9,7 @@ on:
     # Minutes are offset off :00 because GitHub drops scheduled runs at the
     # top of the hour under load. Runs are best-effort, so expect the odd
     # skipped tick -- that only costs a few minutes of latency.
-    - cron: "3,18,33,48 * 17-25 9 *"
+    - cron: "3,18,33,48 * 16-25 9 *"
   workflow_dispatch: {}   # lets you trigger a manual run from the Actions tab
 
 # Allow the workflow to commit the updated state file back to the repo.
