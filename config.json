@@ -1,9 +1,7 @@
 {
-  "detector": "venue_date",
-  "movie": "Spider-Man: Brand New Day",
-  "requested_date": "20260730",
-  "venue_code": "INTO",
-  "venue_label": "INOX: The Marina Mall, OMR",
-  "url_template": "https://in.bookmyshow.com/movies/chennai/spiderman-brand-new-day/buytickets/ET00502600/{date}",
-  "min_references": 10
+  "detector": "any_venue_date",
+  "movie": "The Paradise",
+  "requested_date": "20260924",
+  "min_venues": 1,
+  "url_template": "https://in.bookmyshow.com/movies/hyderabad/the-paradise/buytickets/ET00436621/{date}"
 }

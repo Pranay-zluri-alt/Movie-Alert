@@ -90,7 +90,7 @@ def load_config():
 
     required = ["target_url", "telegram_bot_token", "telegram_chat_id"]
     detector = cfg.get("detector")
-    if detector in ("bms_date", "venue_date"):
+    if detector in ("bms_date", "venue_date", "any_venue_date"):
         required.append("requested_date")
     elif detector != "venue_date":
         required.append("theatre")
@@ -206,8 +206,33 @@ def is_available_venue_date(page_text, cfg):
     return any("/{}/{}".format(code, date) in page_text for code in codes)
 
 
+def is_available_any_venue_date(page_text, cfg):
+    """
+    "Booking opened at ANY theatre in this city, for this exact date."
+
+    BMS renders a per-venue booking link like
+        /cinemas/<city>/<slug>/buytickets/<venueCode>/<date>
+    only for venues that actually have live shows on that exact date. Before
+    booking opens there are zero such links; the moment the city goes live
+    there are dozens.
+
+    This is immune to the silent date-fallback (a fallback page carries
+    /<code>/<fallbackDate>, never /<code>/<ourDate>) and, unlike the
+    date-token-frequency heuristic, it doesn't false-positive on a
+    pre-release page that merely echoes the requested date in its URL,
+    canonical tag and date strip.
+
+    `min_venues` (default 1) is how many distinct theatres must be live.
+    """
+    date = cfg["requested_date"]
+    codes = set(re.findall(r"/buytickets/([A-Z0-9]{4})/" + re.escape(date), page_text))
+    return len(codes) >= cfg.get("min_venues", 1)
+
+
 def is_available(page_text, cfg):
     detector = cfg.get("detector")
+    if detector == "any_venue_date":
+        return is_available_any_venue_date(page_text, cfg)
     if detector == "venue_date":
         return is_available_venue_date(page_text, cfg)
     if detector == "bms_date":
@@ -268,7 +293,7 @@ def main():
     print(f"[{label}] available={available} (was {state.get('available')})")
 
     if available and not state.get("available"):
-        if cfg.get("detector") in ("bms_date", "venue_date"):
+        if cfg.get("detector") in ("bms_date", "venue_date", "any_venue_date"):
             rd = cfg["requested_date"]
             pretty = f"{rd[6:8]}-{rd[4:6]}-{rd[0:4]}"
             venue = cfg.get("venue_label") or cfg.get("venue_code") or ""
