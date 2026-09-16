@@ -74,6 +74,8 @@ def load_config():
         "REQUESTED_DATE": "requested_date",
         "TELEGRAM_BOT_TOKEN": "telegram_bot_token",
         "TELEGRAM_CHAT_ID": "telegram_chat_id",
+        "CALLMEBOT_PHONE": "callmebot_phone",
+        "CALLMEBOT_APIKEY": "callmebot_apikey",
     }
     for env_key, cfg_key in env_map.items():
         if os.environ.get(env_key):
@@ -88,7 +90,7 @@ def load_config():
     if cfg.get("url_template") and cfg.get("requested_date"):
         cfg["target_url"] = cfg["url_template"].format(date=cfg["requested_date"])
 
-    required = ["target_url", "telegram_bot_token", "telegram_chat_id"]
+    required = ["target_url"]
     detector = cfg.get("detector")
     if detector in ("bms_date", "venue_date", "any_venue_date"):
         required.append("requested_date")
@@ -99,6 +101,17 @@ def load_config():
     missing = [k for k in required if not cfg.get(k)]
     if missing:
         sys.exit(f"Missing required config: {', '.join(missing)}")
+
+    # At least one notification channel has to be usable, otherwise the poller
+    # would happily detect the opening and tell nobody.
+    has_telegram = cfg.get("telegram_bot_token") and cfg.get("telegram_chat_id")
+    has_whatsapp = cfg.get("callmebot_phone") and cfg.get("callmebot_apikey")
+    if not (has_telegram or has_whatsapp):
+        sys.exit(
+            "No notification channel configured. Set either "
+            "TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID, or "
+            "CALLMEBOT_PHONE + CALLMEBOT_APIKEY."
+        )
     return cfg
 
 
@@ -110,6 +123,68 @@ def send_telegram(token, chat_id, text):
         timeout=30,
     )
     resp.raise_for_status()
+
+
+def send_whatsapp_callmebot(phone, apikey, text):
+    """
+    Send a WhatsApp message via CallMeBot's free personal-use API.
+
+    One-time setup (per recipient number):
+      1. Save +34 623 78 64 49 in your phone's contacts.
+      2. WhatsApp it exactly: "I allow callmebot to send me messages"
+      3. It replies with your API key (usually within 2 minutes).
+
+    Personal use only -- it can message you, not other people or groups.
+    It's a free third-party relay, so treat delivery as best-effort: that's
+    why notify() retries and why we only mark the alert as "sent" once a
+    channel actually succeeds.
+    """
+    resp = requests.get(
+        "https://api.callmebot.com/whatsapp.php",
+        params={"phone": phone, "text": text, "apikey": apikey},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    # CallMeBot answers 200 with an HTML body even for some failures.
+    body = resp.text.lower()
+    if "error" in body or "apikey is not valid" in body:
+        raise requests.RequestException(f"CallMeBot rejected the send: {resp.text[:200]}")
+
+
+def notify(cfg, text):
+    """
+    Fan the alert out to every channel that's configured.
+
+    Returns True if at least one channel accepted the message. The caller
+    only persists the "already alerted" state on True, so a total delivery
+    failure means the next run tries again instead of silently swallowing
+    the one alert you cared about.
+    """
+    channels = []
+    if cfg.get("telegram_bot_token") and cfg.get("telegram_chat_id"):
+        channels.append(
+            ("telegram", lambda: send_telegram(
+                cfg["telegram_bot_token"], cfg["telegram_chat_id"], text))
+        )
+    if cfg.get("callmebot_phone") and cfg.get("callmebot_apikey"):
+        channels.append(
+            ("whatsapp", lambda: send_whatsapp_callmebot(
+                cfg["callmebot_phone"], cfg["callmebot_apikey"], text))
+        )
+
+    delivered = False
+    for name, send in channels:
+        for attempt in range(1, 4):
+            try:
+                send()
+                print(f"  -> {name}: sent")
+                delivered = True
+                break
+            except Exception as exc:  # noqa: BLE001 - one channel must not kill the rest
+                print(f"  -> {name}: attempt {attempt}/3 failed: {exc}")
+                if attempt < 3:
+                    time.sleep(5 * attempt)
+    return delivered
 
 
 def fetch(cfg):
@@ -312,7 +387,12 @@ def main():
                 f"Theatre: {cfg['theatre']}\n\n"
                 f"Book here: {cfg['target_url']}"
             )
-        send_telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"], msg)
+        if not notify(cfg, msg):
+            # Nothing got through. Leave state untouched so the next run
+            # re-attempts the alert rather than losing it.
+            print(f"[{label}] ALL notification channels failed -- not "
+                  f"persisting state, will retry next run")
+            return 1
         print(f"[{label}] notification sent")
 
     # Persist current state so we don't re-alert every run.
