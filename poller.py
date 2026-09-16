@@ -391,12 +391,30 @@ def main():
     target_desc = cfg.get("theatre") or cfg.get("requested_date", "target")
     label = f"{cfg.get('movie', 'movie')} @ {target_desc}"
 
-    try:
-        page = fetch(cfg)
-    except requests.RequestException as exc:
-        # Transient network/blocking errors shouldn't crash the workflow.
-        print(f"[{label}] fetch failed: {exc}")
-        return 0
+    page = None
+    last_exc = None
+    for attempt in range(1, 4):
+        try:
+            page = fetch(cfg)
+            break
+        except requests.RequestException as exc:
+            last_exc = exc
+            print(f"[{label}] fetch attempt {attempt}/3 failed: {exc}")
+            if attempt < 3:
+                time.sleep(5 * attempt)
+
+    if page is None:
+        # A run that can't read the page has checked NOTHING. Exiting 0 here
+        # would paint the job green and hide that -- which is exactly how a
+        # watcher silently stops watching for days. Fail loudly instead.
+        print(f"[{label}] FETCH FAILED after 3 attempts -- nothing was checked.")
+        if "403" in str(last_exc):
+            print(
+                "  403 means BookMyShow geo-blocked the runner. GitHub's "
+                "runners are outside India. Set the SCRAPERAPI_KEY secret "
+                "(or PROXY_URL) to route through an India IP."
+            )
+        return 1
 
     available = is_available(page, cfg)
     print(f"[{label}] available={available} (was {state.get('available')})")
