@@ -9,14 +9,18 @@
   "venue_codes": [
     "PRHN",
     "SMMR",
-    "CVMU",
-    "SRKR"
+    "ARYH",
+    "ABCS",
+    "SRKR",
+    "CVMU"
   ],
   "venue_names": {
     "PRHN": "Prasads Multiplex",
     "SMMR": "Sandhya 70mm 4K Dolby Atmos, RTC X Roads",
-    "CVMU": "Cineverse Multiplex, Uppal",
-    "SRKR": "Sri Krishna 70mm, Uppal"
+    "ARYH": "Asian Rajya Lakshmi, Uppal",
+    "ABCS": "Cinepolis DSL Virtue Mall, Uppal",
+    "SRKR": "Sri Krishna 70mm, Uppal",
+    "CVMU": "Cineverse Multiplex, Uppal"
   },
   "ntfy_title": "The Paradise - tickets open",
   "url_template": "https://in.bookmyshow.com/movies/hyderabad/the-paradise/buytickets/ET00436621/{date}"
