@@ -31,8 +31,13 @@ jobs:
 
       - name: Run poller
         env:
+          # Notification channels -- set either pair (or both). The poller
+          # exits non-zero if no channel is configured, or if every channel
+          # fails to deliver, so the state file isn't advanced on a miss.
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CALLMEBOT_PHONE: ${{ secrets.CALLMEBOT_PHONE }}
+          CALLMEBOT_APIKEY: ${{ secrets.CALLMEBOT_APIKEY }}
           # Route through an India egress so BookMyShow doesn't 403 the
           # US-based GitHub runner. Set SCRAPERAPI_KEY (or PROXY_URL) as a secret.
           SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}
