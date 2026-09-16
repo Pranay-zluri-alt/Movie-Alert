@@ -1,7 +1,23 @@
 {
-  "detector": "any_venue_date",
+  "detector": "venue_dates",
   "movie": "The Paradise",
   "requested_date": "20260924",
-  "min_venues": 1,
+  "watch_dates": [
+    "20260923",
+    "20260924"
+  ],
+  "venue_codes": [
+    "PRHN",
+    "SMMR",
+    "CVMU",
+    "SRKR"
+  ],
+  "venue_names": {
+    "PRHN": "Prasads Multiplex",
+    "SMMR": "Sandhya 70mm 4K Dolby Atmos, RTC X Roads",
+    "CVMU": "Cineverse Multiplex, Uppal",
+    "SRKR": "Sri Krishna 70mm, Uppal"
+  },
+  "ntfy_title": "The Paradise - tickets open",
   "url_template": "https://in.bookmyshow.com/movies/hyderabad/the-paradise/buytickets/ET00436621/{date}"
 }

@@ -74,8 +74,8 @@ def load_config():
         "REQUESTED_DATE": "requested_date",
         "TELEGRAM_BOT_TOKEN": "telegram_bot_token",
         "TELEGRAM_CHAT_ID": "telegram_chat_id",
-        "CALLMEBOT_PHONE": "callmebot_phone",
-        "CALLMEBOT_APIKEY": "callmebot_apikey",
+        "NTFY_TOPIC": "ntfy_topic",
+        "NTFY_SERVER": "ntfy_server",
     }
     for env_key, cfg_key in env_map.items():
         if os.environ.get(env_key):
@@ -92,12 +92,13 @@ def load_config():
 
     required = ["target_url"]
     detector = cfg.get("detector")
-    if detector in ("bms_date", "venue_date", "any_venue_date"):
+    if detector in ("bms_date", "venue_date", "any_venue_date", "venue_dates"):
         required.append("requested_date")
-    elif detector != "venue_date":
+    elif detector not in ("venue_date", "venue_dates"):
         required.append("theatre")
-    if detector == "venue_date" and not (cfg.get("venue_code") or cfg.get("venue_codes")):
-        sys.exit("venue_date detector needs 'venue_code' or 'venue_codes'")
+    if detector in ("venue_date", "venue_dates") and not (
+            cfg.get("venue_code") or cfg.get("venue_codes")):
+        sys.exit(f"{detector} detector needs 'venue_code' or 'venue_codes'")
     missing = [k for k in required if not cfg.get(k)]
     if missing:
         sys.exit(f"Missing required config: {', '.join(missing)}")
@@ -105,12 +106,10 @@ def load_config():
     # At least one notification channel has to be usable, otherwise the poller
     # would happily detect the opening and tell nobody.
     has_telegram = cfg.get("telegram_bot_token") and cfg.get("telegram_chat_id")
-    has_whatsapp = cfg.get("callmebot_phone") and cfg.get("callmebot_apikey")
-    if not (has_telegram or has_whatsapp):
+    if not (cfg.get("ntfy_topic") or has_telegram):
         sys.exit(
-            "No notification channel configured. Set either "
-            "TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID, or "
-            "CALLMEBOT_PHONE + CALLMEBOT_APIKEY."
+            "No notification channel configured. Set NTFY_TOPIC "
+            "(recommended) and/or TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID."
         )
     return cfg
 
@@ -125,30 +124,33 @@ def send_telegram(token, chat_id, text):
     resp.raise_for_status()
 
 
-def send_whatsapp_callmebot(phone, apikey, text):
+def send_ntfy(cfg, text):
     """
-    Send a WhatsApp message via CallMeBot's free personal-use API.
+    Push to the user's phone via ntfy.sh.
 
-    One-time setup (per recipient number):
-      1. Save +34 623 78 64 49 in your phone's contacts.
-      2. WhatsApp it exactly: "I allow callmebot to send me messages"
-      3. It replies with your API key (usually within 2 minutes).
+    ntfy needs no account and no API key: you pick an unguessable topic
+    name, subscribe to it in the ntfy app, and anyone who POSTs to
+    https://ntfy.sh/<topic> makes your phone buzz. That's the whole setup,
+    which is why it beats Telegram bots or WhatsApp relays here.
 
-    Personal use only -- it can message you, not other people or groups.
-    It's a free third-party relay, so treat delivery as best-effort: that's
-    why notify() retries and why we only mark the alert as "sent" once a
-    channel actually succeeds.
+    Because the public server has no auth, the topic name IS the secret --
+    keep it random and don't paste it anywhere public.
     """
-    resp = requests.get(
-        "https://api.callmebot.com/whatsapp.php",
-        params={"phone": phone, "text": text, "apikey": apikey},
+    server = cfg.get("ntfy_server", "https://ntfy.sh").rstrip("/")
+    headers = {
+        "Title": cfg.get("ntfy_title", "Tickets are open"),
+        "Priority": "urgent",
+        "Tags": "clapper,tickets",
+    }
+    if cfg.get("target_url"):
+        headers["Click"] = cfg["target_url"]
+    resp = requests.post(
+        f"{server}/{cfg['ntfy_topic']}",
+        data=text.encode("utf-8"),
+        headers=headers,
         timeout=30,
     )
     resp.raise_for_status()
-    # CallMeBot answers 200 with an HTML body even for some failures.
-    body = resp.text.lower()
-    if "error" in body or "apikey is not valid" in body:
-        raise requests.RequestException(f"CallMeBot rejected the send: {resp.text[:200]}")
 
 
 def notify(cfg, text):
@@ -161,15 +163,12 @@ def notify(cfg, text):
     the one alert you cared about.
     """
     channels = []
+    if cfg.get("ntfy_topic"):
+        channels.append(("ntfy", lambda: send_ntfy(cfg, text)))
     if cfg.get("telegram_bot_token") and cfg.get("telegram_chat_id"):
         channels.append(
             ("telegram", lambda: send_telegram(
                 cfg["telegram_bot_token"], cfg["telegram_chat_id"], text))
-        )
-    if cfg.get("callmebot_phone") and cfg.get("callmebot_apikey"):
-        channels.append(
-            ("whatsapp", lambda: send_whatsapp_callmebot(
-                cfg["callmebot_phone"], cfg["callmebot_apikey"], text))
         )
 
     delivered = False
@@ -304,8 +303,43 @@ def is_available_any_venue_date(page_text, cfg):
     return len(codes) >= cfg.get("min_venues", 1)
 
 
+def is_available_venue_dates(page_text, cfg):
+    """
+    Watch specific theatres across one or more dates -- in a single request.
+
+    Two BMS behaviours make this work:
+
+    * A per-venue link /cinemas/<city>/<slug>/buytickets/<CODE>/<date> is
+      rendered only when that venue has live shows on that exact date.
+    * When you ask for a date that hasn't opened, BMS silently falls back to
+      the nearest date that HAS opened, and renders that date's links.
+
+    So requesting the release date also surfaces an earlier premiere date if
+    that's what opened first. That matters for Telugu releases, where paid
+    premieres on the eve routinely open before the release day itself -- and
+    it costs no extra requests, which keeps us inside ScraperAPI's free tier.
+
+    Records every (venue, date) hit in cfg["_hits"] so the alert can say
+    which theatre and which date actually opened.
+    """
+    codes = cfg.get("venue_codes") or [cfg["venue_code"]]
+    dates = set(cfg.get("watch_dates") or [cfg["requested_date"]])
+
+    hits = []
+    for code in codes:
+        for m in re.finditer(r"/buytickets/%s/(\d{8})" % re.escape(code), page_text):
+            if m.group(1) in dates:
+                hit = (code, m.group(1))
+                if hit not in hits:
+                    hits.append(hit)
+    cfg["_hits"] = hits
+    return bool(hits)
+
+
 def is_available(page_text, cfg):
     detector = cfg.get("detector")
+    if detector == "venue_dates":
+        return is_available_venue_dates(page_text, cfg)
     if detector == "any_venue_date":
         return is_available_any_venue_date(page_text, cfg)
     if detector == "venue_date":
@@ -368,7 +402,18 @@ def main():
     print(f"[{label}] available={available} (was {state.get('available')})")
 
     if available and not state.get("available"):
-        if cfg.get("detector") in ("bms_date", "venue_date", "any_venue_date"):
+        if cfg.get("detector") == "venue_dates":
+            names = cfg.get("venue_names", {})
+            lines = []
+            for code, d in cfg.get("_hits", []):
+                pretty = f"{d[6:8]}-{d[4:6]}-{d[0:4]}"
+                lines.append(f"- {names.get(code, code)} - {pretty}")
+            msg = (
+                f"BOOKING OPEN: {cfg.get('movie', 'Movie')}\n\n"
+                + "\n".join(lines)
+                + f"\n\nBook: {cfg['target_url']}"
+            )
+        elif cfg.get("detector") in ("bms_date", "venue_date", "any_venue_date"):
             rd = cfg["requested_date"]
             pretty = f"{rd[6:8]}-{rd[4:6]}-{rd[0:4]}"
             venue = cfg.get("venue_label") or cfg.get("venue_code") or ""
