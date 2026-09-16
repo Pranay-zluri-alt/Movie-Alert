@@ -1,11 +1,15 @@
 name: booking-watch
 
 on:
-  # schedule:
-  #   # Every ~10 min, offset off :00/:10 etc. GitHub delays/drops scheduled
-  #   # runs during high load (worst at the top of the hour), so the odd minutes
-  #   # get served more reliably. Runs are still best-effort, not guaranteed.
-  #   - cron: "4,14,24,34,44,54 * * * *"
+  schedule:
+    # Every 15 min, 17-25 September only -- the window around the 24 Sep
+    # release (premieres can open on the 23rd). Bounded on purpose:
+    # ScraperAPI's free tier is 1,000 credits/month and continuous 10-min
+    # polling would burn that in about two days. This window costs ~865.
+    # Minutes are offset off :00 because GitHub drops scheduled runs at the
+    # top of the hour under load. Runs are best-effort, so expect the odd
+    # skipped tick -- that only costs a few minutes of latency.
+    - cron: "3,18,33,48 * 17-25 9 *"
   workflow_dispatch: {}   # lets you trigger a manual run from the Actions tab
 
 # Allow the workflow to commit the updated state file back to the repo.
@@ -31,13 +35,13 @@ jobs:
 
       - name: Run poller
         env:
-          # Notification channels -- set either pair (or both). The poller
+          # Notification channels. NTFY_TOPIC alone is enough (phone push,
+          # no account needed); Telegram is optional and additive. The poller
           # exits non-zero if no channel is configured, or if every channel
-          # fails to deliver, so the state file isn't advanced on a miss.
+          # fails to deliver, so state.json isn't advanced on a miss.
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          CALLMEBOT_PHONE: ${{ secrets.CALLMEBOT_PHONE }}
-          CALLMEBOT_APIKEY: ${{ secrets.CALLMEBOT_APIKEY }}
           # Route through an India egress so BookMyShow doesn't 403 the
           # US-based GitHub runner. Set SCRAPERAPI_KEY (or PROXY_URL) as a secret.
           SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}
